@@ -25,22 +25,18 @@ class SelfAttention(nn.Module):
         keys = self.keys(x)
         queries = self.queries(x)
 
-        # split into heads
         values = values.view(N, seq_len, self.num_heads, self.head_dim)
         keys = keys.view(N, seq_len, self.num_heads, self.head_dim)
         queries = queries.view(N, seq_len, self.num_heads, self.head_dim)
 
-        # attention scores
         energy = torch.einsum("nqhd,nkhd->nhqk", [queries, keys])
 
-        # causal mask (no looking ahead)
-        mask = torch.tril(torch.ones(seq_len, seq_len)).to(x.device)
+        mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device))
         energy = energy.masked_fill(mask == 0, float("-inf"))
 
         attention = F.softmax(energy / (self.head_dim ** 0.5), dim=-1)
 
         out = torch.einsum("nhqk,nkhd->nqhd", [attention, values])
-
         out = out.reshape(N, seq_len, self.embed_size)
 
         return self.fc_out(out)
@@ -98,12 +94,24 @@ class GPTModel(nn.Module):
     def forward(self, x):
         N, seq_len = x.shape
 
-        positions = torch.arange(0, seq_len).expand(N, seq_len).to(x.device)
+        positions = torch.arange(0, seq_len, device=x.device).unsqueeze(0).expand(N, seq_len)
 
         x = self.token_embedding(x) + self.position_embedding(positions)
-
         x = self.layers(x)
-
         logits = self.fc_out(x)
 
         return logits
+
+    def generate(self, idx, max_new_tokens, temperature=1.0):
+        for _ in range(max_new_tokens):
+            idx_cond = idx[:, -self.block_size:]
+
+            logits = self(idx_cond)
+            logits = logits[:, -1, :] / temperature
+
+            probs = torch.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+
+            idx = torch.cat((idx, next_token), dim=1)
+
+        return idx
